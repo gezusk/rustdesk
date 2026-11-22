@@ -212,7 +212,23 @@ fn resolve_ipv4(id: &str) -> Option<std::net::Ipv4Addr> {
 
 #[cfg(windows)]
 pub fn ping_ipv4(ip: std::net::Ipv4Addr, timeout_ms: u32) -> bool {
-    use winapi::um::icmpapi::{IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho};
+    use std::ffi::c_void;
+    // winapi 0.3 has no icmpapi bindings, so declare the three iphlpapi functions directly.
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        fn IcmpCreateFile() -> *mut c_void;
+        fn IcmpCloseHandle(handle: *mut c_void) -> i32;
+        fn IcmpSendEcho(
+            handle: *mut c_void,
+            destination: u32,
+            request_data: *mut c_void,
+            request_size: u16,
+            request_options: *mut c_void,
+            reply_buffer: *mut c_void,
+            reply_size: u32,
+            timeout: u32,
+        ) -> u32;
+    }
     let handle = unsafe { IcmpCreateFile() };
     if handle.is_null() || handle as isize == -1 {
         return false;
