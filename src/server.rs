@@ -262,11 +262,24 @@ pub async fn create_tcp_connection(
 /// Our signed identity goes out and, when `secure`, the controller's reply keys `stream`.
 /// Separate so it can be raced against the connection's eviction.
 async fn identity_handshake(stream: &mut Stream, secure: bool) -> ResultType<()> {
+    // LCS: every connection is direct and must be encrypted, whatever the caller asked for.
+    let _ = secure;
     let (sk, pk) = Config::get_key_pair();
-    if secure && pk.len() == sign::PUBLICKEYBYTES && sk.len() == sign::SECRETKEYBYTES {
+    if pk.len() != sign::PUBLICKEYBYTES || sk.len() != sign::SECRETKEYBYTES {
+        bail!("LCS: no valid key pair, refusing unencrypted connection");
+    }
+    {
         let mut sk_ = [0u8; sign::SECRETKEYBYTES];
         sk_[..].copy_from_slice(&sk);
         let sk = sign::SecretKey(sk_);
+        // LCS: first send our long-term signing public key so the viewer can verify
+        // (and pin) the signed identity that follows.
+        let mut msg_pk = Message::new();
+        msg_pk.set_signed_id(SignedId {
+            id: Bytes::from([crate::lcs::PK_MARKER, &pk[..]].concat()),
+            ..Default::default()
+        });
+        timeout(CONNECT_TIMEOUT, stream.send(&msg_pk)).await??;
         let mut msg_out = Message::new();
         let (our_pk_b, our_sk_b) = box_::gen_keypair();
         // On a WebRTC transport, bind our DTLS certificate fingerprint to our signed identity so
@@ -289,7 +302,8 @@ async fn identity_handshake(stream: &mut Stream, secure: bool) -> ResultType<()>
         msg_out.set_signed_id(SignedId {
             id: sign::sign(
                 &IdPk {
-                    id: Config::get_id(),
+                    // LCS: sign our computer name; the viewer checks it against what was typed.
+                    id: crate::whoami_hostname(),
                     pk: Bytes::from(our_pk_b.0.to_vec()),
                     dtls_fingerprint,
                     kx_version: advertised,
@@ -331,14 +345,12 @@ async fn identity_handshake(stream: &mut Stream, secure: bool) -> ResultType<()>
                                     picked: pk.kx_version,
                                 },
                             )?;
-                        } else if pk.asymmetric_value.is_empty() {
-                            Config::set_key_confirmed(false);
-                            log::info!("Force to update pk");
                         } else {
-                            bail!("Handshake failed: invalid public sign key length from peer");
+                            // LCS: no unencrypted fallback (stock: empty key = continue plain).
+                            bail!("Handshake failed: viewer did not complete key exchange");
                         }
                     } else {
-                        log::error!("Handshake failed: invalid message type");
+                        bail!("Handshake failed: invalid message type (not an LCRustdesk viewer?)");
                     }
                 } else {
                     bail!("Handshake failed: invalid message format");

@@ -125,6 +125,79 @@ pub fn save_pins(pins: &HashMap<String, String>) {
     LocalConfig::set_option(OPTION_PINNED_KEYS.to_owned(), v);
 }
 
+/// Viewer side of the direct-connection handshake. Reads the service's long-term signing
+/// key, verifies its signed identity with it, checks the signed computer name against what
+/// was typed, pins the key on first contact, then keys `conn` with RustDesk's normal key
+/// exchange. Every failure is an error: there is no unencrypted fallback.
+/// Returns the peer's signed computer name.
+pub async fn secure_direct(typed: &str, conn: &mut hbb_common::Stream) -> hbb_common::ResultType<String> {
+    use base::message_proto::{message, Message, PublicKey};
+    use hbb_common::{
+        anyhow::anyhow,
+        bail,
+        config::{CONNECT_TIMEOUT, READ_TIMEOUT},
+        protobuf::Message as _,
+        sodiumoxide::crypto::sign,
+        tcp, timeout,
+    };
+
+    async fn next_signed_id(conn: &mut hbb_common::Stream) -> hbb_common::ResultType<Vec<u8>> {
+        let bytes = timeout(READ_TIMEOUT, conn.next())
+            .await?
+            .ok_or_else(|| anyhow!("Reset by the peer"))??;
+        match Message::parse_from_bytes(&bytes)?.union {
+            Some(message::Union::SignedId(si)) => Ok(si.id.to_vec()),
+            _ => bail!("Handshake failed: unexpected message (is the remote PC running LCRustdesk?)"),
+        }
+    }
+
+    let raw = next_signed_id(conn).await?;
+    if raw.len() != PK_MARKER.len() + sign::PUBLICKEYBYTES || !raw.starts_with(PK_MARKER) {
+        bail!("Handshake failed: the remote PC is not running LCRustdesk");
+    }
+    let mut pk = [0u8; sign::PUBLICKEYBYTES];
+    pk.copy_from_slice(&raw[PK_MARKER.len()..]);
+    let sign_pk = sign::PublicKey(pk);
+
+    let signed = next_signed_id(conn).await?;
+    let (name, their_pk_b, _, kx_version) = crate::common::decode_id_pk_dtls(&signed, &sign_pk)?;
+    if !signed_name_ok(typed, &name) {
+        bail!("Connected to {name}, expected {typed}");
+    }
+
+    let mut pins = load_pins();
+    match check_pin(&mut pins, &name, &crate::common::encode64(pk)) {
+        PinResult::FirstSeen => save_pins(&pins),
+        PinResult::Match => {}
+        PinResult::Mismatch => bail!(
+            "{name}'s key has changed since your last connection. If this PC was reimaged or \
+             LCRustdesk was reinstalled, clear the saved key with: LCRustdesk.exe --forget-key {name}"
+        ),
+    }
+
+    let (asymmetric_value, symmetric_value, key) = crate::common::create_symmetric_key_msg(their_pk_b);
+    let picked = tcp::kx_version_for(kx_version);
+    let mut msg_out = Message::new();
+    msg_out.set_public_key(PublicKey {
+        asymmetric_value: asymmetric_value.clone(),
+        symmetric_value,
+        kx_version: picked,
+        ..Default::default()
+    });
+    timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
+    conn.set_negotiated_key(
+        key,
+        true,
+        &tcp::KxTranscript {
+            initiator_pk: &asymmetric_value,
+            responder_pk: &their_pk_b,
+            advertised: kx_version,
+            picked,
+        },
+    )?;
+    Ok(name)
+}
+
 /// Encrypts `plain` for the current Windows user with DPAPI; base64 of the blob.
 #[cfg(windows)]
 pub fn protect(plain: &str) -> Option<String> {

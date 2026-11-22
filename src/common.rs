@@ -3099,7 +3099,8 @@ pub fn get_control_permission(
 }
 
 pub fn is_direct_ip_access(peer: &str) -> bool {
-    hbb_common::is_ip_str(peer) || hbb_common::is_domain_port_str(peer)
+    // LCS: every valid typed address (IP, computer name, FQDN) is a direct connection.
+    crate::lcs::lan_target(peer).is_some()
 }
 
 // Align the maximum length of the peer id to the maximum length of the peer id in the server.

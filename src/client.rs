@@ -436,6 +436,14 @@ impl Client {
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
         }
+        // LCS: every address is a direct, encrypted connection; rendezvous/relay is never used.
+        if true {
+            let target = crate::lcs::lan_target(peer)
+                .ok_or_else(|| anyhow!("Invalid address: {peer}"))?;
+            let mut stream = connect_tcp_local(target, None, CONNECT_TIMEOUT).await?;
+            crate::lcs::secure_direct(peer, &mut stream).await?;
+            return Ok(((stream, true, None, None, "TCP"), (0, "".to_owned()), false));
+        }
         // to-do: remember the port for each peer, so that we can retry easier
         if hbb_common::is_ip_str(peer) {
             return Ok((

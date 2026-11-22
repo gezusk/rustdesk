@@ -1403,6 +1403,8 @@ fn get_direct_port() -> i32 {
 }
 
 async fn direct_server(server: ServerPtr) {
+    // LCS: make sure our long-term key pair exists before the first connection is accepted.
+    let _ = Config::get_key_pair();
     let mut listener = None;
     let mut port = 0;
     loop {
@@ -1455,7 +1457,8 @@ async fn direct_server(server: ServerPtr) {
                             server,
                             hbb_common::Stream::from(stream, local_addr),
                             addr,
-                            false,
+                            true, // LCS: direct connections are always encrypted
+
                             ConnectionMeta::default(), // Direct connections don't have server-side user context.
                         )
                         .await
