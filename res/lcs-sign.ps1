@@ -16,8 +16,8 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\si
     Sort-Object FullName -Descending | Select-Object -First 1
 if (-not $signtool) { throw 'signtool.exe not found' }
 
-$files = Get-ChildItem -Path $Path -Recurse -File -Include *.exe, *.dll, *.msi |
-    Where-Object { -not (Get-AuthenticodeSignature $_.FullName).SignerCertificate }
+$files = @(Get-ChildItem -Path $Path -Recurse -File -Include *.exe, *.dll, *.msi |
+    Where-Object { -not (Get-AuthenticodeSignature $_.FullName).SignerCertificate })
 if (-not $files) { throw "Nothing to sign under: $($Path -join ', ')" }
 
 $pfx = Join-Path $env:RUNNER_TEMP 'lcs-sign.pfx'
