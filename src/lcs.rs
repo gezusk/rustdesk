@@ -174,6 +174,43 @@ fn save_pending_keys(pending: &HashMap<String, (String, u64)>) {
     LocalConfig::set_option(OPTION_PENDING_KEYS.to_owned(), v);
 }
 
+/// Recent entries (other than `current_id` and favorites) that belong to the same PC,
+/// i.e. reported the same computer name. Names that don't identify a PC are never merged.
+pub fn duplicate_recent_ids(
+    current_id: &str,
+    hostname: &str,
+    peers: &[(String, String)],
+    favorites: &[String],
+) -> Vec<String> {
+    let host = hostname.trim().trim_end_matches('.');
+    if host.is_empty() || host.eq_ignore_ascii_case("unknown") || host.eq_ignore_ascii_case("localhost") {
+        return vec![];
+    }
+    peers
+        .iter()
+        .filter(|(id, peer_host)| {
+            id != current_id
+                && !favorites.contains(id)
+                && peer_host.trim().trim_end_matches('.').eq_ignore_ascii_case(host)
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// After a successful login, keep one Recent card per PC: remove the other entries that
+/// reported the same computer name (the card for the address used now is kept).
+pub fn consolidate_recent(current_id: &str, hostname: &str) {
+    use hbb_common::config::PeerConfig;
+    let peers: Vec<(String, String)> = PeerConfig::peers(None)
+        .into_iter()
+        .map(|(id, _, cfg)| (id, cfg.info.hostname))
+        .collect();
+    for id in duplicate_recent_ids(current_id, hostname, &peers, &LocalConfig::get_fav()) {
+        hbb_common::log::info!("LCS: removing duplicate recent entry {id} (same PC as {current_id})");
+        PeerConfig::remove(&id);
+    }
+}
+
 /// Online dots: one ICMP echo per peer (IPv4), all in parallel. A peer is online only if
 /// the PC itself replied; names are resolved with Windows DNS like a connection would be.
 pub async fn ping_states(ids: Vec<String>) -> (Vec<String>, Vec<String>) {
@@ -509,6 +546,23 @@ mod tests {
         assert_eq!(key_change(&mut pins, &mut pending, "pc01", "OTHER", 1131 + 60), KeyChange::Accepted);
         assert_eq!(pins["pc01"], "OTHER");
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn duplicate_recent_cases() {
+        let peers = vec![
+            ("pc01".to_owned(), "PC01".to_owned()),
+            ("192.0.2.13".to_owned(), "pc01".to_owned()),
+            ("pc01.example.org".to_owned(), "pc01".to_owned()),
+            ("pc02".to_owned(), "pc02".to_owned()),
+            ("192.0.2.99".to_owned(), "unknown".to_owned()),
+        ];
+        let favs = vec!["pc01.example.org".to_owned()];
+        // Same PC under another address is removed; the current entry, favorites and other PCs stay.
+        assert_eq!(duplicate_recent_ids("pc01", "pc01", &peers, &favs), vec!["192.0.2.13".to_owned()]);
+        // Names that don't identify a PC never merge anything.
+        assert!(duplicate_recent_ids("192.0.2.99", "unknown", &peers, &[]).is_empty());
+        assert!(duplicate_recent_ids("x", "", &peers, &[]).is_empty());
     }
 
     #[cfg(windows)]

@@ -3679,6 +3679,7 @@ impl LoginConfigHandler {
         if let Some(p) = self.lcs_typed_password.take() {
             crate::lcs::set_shared_password(&p);
         }
+        crate::lcs::consolidate_recent(&self.id, &pi.hostname);
         if !pi.version.is_empty() {
             self.version = hbb_common::get_version_number(&pi.version);
         }
