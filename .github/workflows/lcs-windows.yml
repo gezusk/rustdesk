@@ -142,6 +142,14 @@ jobs:
           name: topmostwindow-artifacts-x64
           path: "./rustdesk"
 
+      # Secrets go only to the signing steps, never to the job env, so third-party actions
+      # in this job can't read the certificate.
+      - name: Sign LCRustdesk binaries
+        env:
+          LCS_SIGN_PFX: ${{ secrets.LCS_SIGN_PFX }}
+          LCS_SIGN_PFX_PASSWORD: ${{ secrets.LCS_SIGN_PFX_PASSWORD }}
+        run: ./res/lcs-sign.ps1 -Path ./rustdesk
+
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
         with:
@@ -157,6 +165,13 @@ jobs:
           $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
           mv $msi.FullName ../../SignOutput/${{ env.APP_NAME }}-${{ env.VERSION }}-x86_64.msi
           popd
+
+      - name: Sign MSI
+        env:
+          LCS_SIGN_PFX: ${{ secrets.LCS_SIGN_PFX }}
+          LCS_SIGN_PFX_PASSWORD: ${{ secrets.LCS_SIGN_PFX_PASSWORD }}
+        run: |
+          ./res/lcs-sign.ps1 -Path ./SignOutput
           Get-FileHash ./SignOutput/*.msi -Algorithm SHA256 | Format-List
 
       - name: Upload MSI
