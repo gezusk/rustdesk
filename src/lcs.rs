@@ -125,6 +125,129 @@ pub fn save_pins(pins: &HashMap<String, String>) {
     LocalConfig::set_option(OPTION_PINNED_KEYS.to_owned(), v);
 }
 
+/// Reconnecting to a PC within this many seconds of a key-changed refusal, and seeing the
+/// same new key again, trusts that new key.
+pub const KEY_CHANGE_WINDOW_SECS: u64 = 120;
+const OPTION_PENDING_KEYS: &str = "lcs-pending-keys";
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum KeyChange {
+    /// First sighting of this new key: refuse and remember it.
+    Pending,
+    /// Same new key seen again within the window: it replaced the pin.
+    Accepted,
+}
+
+/// Handles a pin mismatch. The new key is only trusted on a deliberate second attempt
+/// that presents the exact key seen in the refused attempt, within the window.
+pub fn key_change(
+    pins: &mut HashMap<String, String>,
+    pending: &mut HashMap<String, (String, u64)>,
+    name: &str,
+    key_b64: &str,
+    now_secs: u64,
+) -> KeyChange {
+    let name = name.trim().to_ascii_lowercase();
+    match pending.get(&name) {
+        Some((k, seen)) if k == key_b64 && now_secs.saturating_sub(*seen) <= KEY_CHANGE_WINDOW_SECS => {
+            pending.remove(&name);
+            pins.insert(name, key_b64.to_owned());
+            KeyChange::Accepted
+        }
+        _ => {
+            pending.insert(name, (key_b64.to_owned(), now_secs));
+            KeyChange::Pending
+        }
+    }
+}
+
+fn load_pending_keys() -> HashMap<String, (String, u64)> {
+    serde_json::from_str(&LocalConfig::get_option(OPTION_PENDING_KEYS)).unwrap_or_default()
+}
+
+fn save_pending_keys(pending: &HashMap<String, (String, u64)>) {
+    let v = if pending.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(pending).unwrap_or_default()
+    };
+    LocalConfig::set_option(OPTION_PENDING_KEYS.to_owned(), v);
+}
+
+/// Online dots: one ICMP echo per peer (IPv4), all in parallel. A peer is online only if
+/// the PC itself replied; names are resolved with Windows DNS like a connection would be.
+pub async fn ping_states(ids: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let tasks: Vec<_> = ids
+        .into_iter()
+        .map(|id| {
+            hbb_common::tokio::task::spawn_blocking(move || {
+                let up = resolve_ipv4(&id).map(|ip| ping_ipv4(ip, 1000)).unwrap_or(false);
+                (id, up)
+            })
+        })
+        .collect();
+    let (mut onlines, mut offlines) = (Vec::new(), Vec::new());
+    for t in tasks {
+        if let Ok((id, up)) = t.await {
+            if up {
+                onlines.push(id);
+            } else {
+                offlines.push(id);
+            }
+        }
+    }
+    (onlines, offlines)
+}
+
+fn resolve_ipv4(id: &str) -> Option<std::net::Ipv4Addr> {
+    use std::net::{SocketAddr, ToSocketAddrs};
+    lan_target(id)?
+        .to_socket_addrs()
+        .ok()?
+        .find_map(|a| match a {
+            SocketAddr::V4(v4) => Some(*v4.ip()),
+            SocketAddr::V6(_) => None,
+        })
+}
+
+#[cfg(windows)]
+pub fn ping_ipv4(ip: std::net::Ipv4Addr, timeout_ms: u32) -> bool {
+    use winapi::um::icmpapi::{IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho};
+    let handle = unsafe { IcmpCreateFile() };
+    if handle.is_null() || handle as isize == -1 {
+        return false;
+    }
+    let mut payload = *b"lcrustdesk-ping";
+    // ICMP_ECHO_REPLY (40 bytes on x64) + echoed payload + 8 bytes for an ICMP error, per docs.
+    let mut reply = vec![0u8; 128];
+    let n = unsafe {
+        IcmpSendEcho(
+            handle,
+            u32::from_ne_bytes(ip.octets()),
+            payload.as_mut_ptr() as _,
+            payload.len() as u16,
+            std::ptr::null_mut(),
+            reply.as_mut_ptr() as _,
+            reply.len() as u32,
+            timeout_ms,
+        )
+    };
+    // ICMP_ECHO_REPLY starts with Address (IPAddr, u32) then Status (u32); IP_SUCCESS is 0.
+    // Requiring Address == target ignores "unreachable" replies sent by a router.
+    let ok = n > 0 && {
+        let address = u32::from_ne_bytes([reply[0], reply[1], reply[2], reply[3]]);
+        let status = u32::from_ne_bytes([reply[4], reply[5], reply[6], reply[7]]);
+        status == 0 && address == u32::from_ne_bytes(ip.octets())
+    };
+    unsafe { IcmpCloseHandle(handle) };
+    ok
+}
+
+#[cfg(not(windows))]
+pub fn ping_ipv4(_ip: std::net::Ipv4Addr, _timeout_ms: u32) -> bool {
+    false
+}
+
 /// Viewer side of the direct-connection handshake. Reads the service's long-term signing
 /// key, verifies its signed identity with it, checks the signed computer name against what
 /// was typed, pins the key on first contact, then keys `conn` with RustDesk's normal key
@@ -166,13 +289,30 @@ pub async fn secure_direct(typed: &str, conn: &mut hbb_common::Stream) -> hbb_co
     }
 
     let mut pins = load_pins();
-    match check_pin(&mut pins, &name, &crate::common::encode64(pk)) {
+    let key_b64 = crate::common::encode64(pk);
+    match check_pin(&mut pins, &name, &key_b64) {
         PinResult::FirstSeen => save_pins(&pins),
         PinResult::Match => {}
-        PinResult::Mismatch => bail!(
-            "{name}'s key has changed since your last connection. If this PC was reimaged or \
-             LCRustdesk was reinstalled, clear the saved key with: LCRustdesk.exe --forget-key {name}"
-        ),
+        PinResult::Mismatch => {
+            let mut pending = load_pending_keys();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or_default();
+            let outcome = key_change(&mut pins, &mut pending, &name, &key_b64, now);
+            save_pending_keys(&pending);
+            match outcome {
+                KeyChange::Accepted => {
+                    save_pins(&pins);
+                    hbb_common::log::warn!("LCS: trusted new key for {name} after reconnect");
+                }
+                KeyChange::Pending => bail!(
+                    "{name}'s key has changed since your last connection. If this PC was \
+                     reimaged or LCRustdesk was reinstalled, connect again within 2 minutes to \
+                     trust the new key. If not, don't connect and report it."
+                ),
+            }
+        }
     }
 
     let (asymmetric_value, symmetric_value, key) = crate::common::create_symmetric_key_msg(their_pk_b);
@@ -335,6 +475,30 @@ mod tests {
         assert_eq!(check_pin(&mut s, "pc01", "K2"), PinResult::Mismatch);
         assert!(forget_pin(&mut s, "Pc01"));
         assert_eq!(check_pin(&mut s, "pc01", "K2"), PinResult::FirstSeen);
+    }
+
+    #[test]
+    fn key_change_cases() {
+        let mut pins = HashMap::from([("pc01".to_owned(), "OLD".to_owned())]);
+        let mut pending = HashMap::new();
+        // First sighting of a new key: refused and remembered, pin untouched.
+        assert_eq!(key_change(&mut pins, &mut pending, "PC01", "NEW", 1000), KeyChange::Pending);
+        assert_eq!(pins["pc01"], "OLD");
+        // A different new key on reconnect: still refused (restarts the window).
+        assert_eq!(key_change(&mut pins, &mut pending, "pc01", "OTHER", 1010), KeyChange::Pending);
+        assert_eq!(pins["pc01"], "OLD");
+        // Same key, but after the window: refused.
+        assert_eq!(key_change(&mut pins, &mut pending, "pc01", "OTHER", 1010 + 121), KeyChange::Pending);
+        // Same key again within the window: accepted, pin replaced, pending cleared.
+        assert_eq!(key_change(&mut pins, &mut pending, "pc01", "OTHER", 1131 + 60), KeyChange::Accepted);
+        assert_eq!(pins["pc01"], "OTHER");
+        assert!(pending.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ping_loopback() {
+        assert!(ping_ipv4(std::net::Ipv4Addr::LOCALHOST, 1000));
     }
 
     #[cfg(windows)]

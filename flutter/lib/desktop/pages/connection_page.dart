@@ -173,7 +173,8 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
     // LCS: LAN-only build has no rendezvous server, so the rendezvous status is
     // meaningless; always show Ready (service-stopped is still shown separately).
     stateGlobal.svcStatus.value = SvcStatus.ready;
-    _svcIsUsingPublicServer.value = await bind.mainIsUsingPublicServer();
+    // LCS: no servers at all, so never show the "set up your own server" hint.
+    _svcIsUsingPublicServer.value = false;
     try {
       stateGlobal.videoConnCount.value = status['video_conn_count'] as int;
     } catch (_) {}

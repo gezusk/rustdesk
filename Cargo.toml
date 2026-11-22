@@ -127,6 +127,7 @@ winapi = { version = "0.3", features = [
     "winspool",
     "dpapi",
     "winbase",
+    "icmpapi",
 ] }
 windows = { version = "0.61", features = [
     "Wdk_Foundation",

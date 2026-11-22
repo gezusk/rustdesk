@@ -5376,10 +5376,10 @@ pub mod peer_online {
     };
 
     pub async fn query_online_states<F: FnOnce(Vec<String>, Vec<String>)>(ids: Vec<String>, f: F) {
-        // LCS: no rendezvous server to ask; report no states.
+        // LCS: no rendezvous server to ask; a PC is online if it answers ping.
         if true {
-            let _ = ids;
-            f(vec![], vec![]);
+            let (onlines, offlines) = crate::lcs::ping_states(ids).await;
+            f(onlines, offlines);
             return;
         }
         let test = false;

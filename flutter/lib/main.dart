@@ -309,6 +309,7 @@ showCmWindow({bool isStartup = false}) async {
         size: kConnectionManagerWindowSizeClosedChat, alwaysOnTop: true);
     await windowManager.waitUntilReadyToShow(windowOptions, null);
     bind.mainHideDock();
+    await windowManager.setSkipTaskbar(false);
     await Future.wait([
       windowManager.show(),
       windowManager.focus(),
@@ -320,6 +321,7 @@ showCmWindow({bool isStartup = false}) async {
     _isCmReadyToShow = true;
   } else if (_isCmReadyToShow) {
     if (await windowManager.getOpacity() != 1) {
+      await windowManager.setSkipTaskbar(false);
       await windowManager.setOpacity(1);
       await windowManager.focus();
       await windowManager.minimize(); //needed
@@ -337,6 +339,8 @@ hideCmWindow({bool isStartup = false}) async {
     windowManager.setOpacity(0);
     await windowManager.waitUntilReadyToShow(windowOptions, null);
     bind.mainHideDock();
+    // LCS: a hidden window must not leave a taskbar button (its preview shows the window).
+    await windowManager.setSkipTaskbar(true);
     await windowManager.minimize();
     await windowManager.hide();
     _isCmReadyToShow = true;
@@ -344,6 +348,7 @@ hideCmWindow({bool isStartup = false}) async {
     if (await windowManager.getOpacity() != 0) {
       await windowManager.setOpacity(0);
       bind.mainHideDock();
+      await windowManager.setSkipTaskbar(true);
       await windowManager.minimize();
       await windowManager.hide();
     }
