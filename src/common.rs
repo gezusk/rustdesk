@@ -693,6 +693,10 @@ impl Drop for CheckTestNatType {
 }
 
 pub fn test_nat_type() {
+    // LCS: LAN only, never probe servers.
+    if true {
+        return;
+    }
     test_ipv6_sync();
     use std::sync::atomic::{AtomicBool, Ordering};
     std::thread::spawn(move || {
@@ -870,6 +874,10 @@ async fn test_rendezvous_server_() {
 }
 
 pub fn test_rendezvous_server() {
+    // LCS: LAN only, never probe servers.
+    if true {
+        return;
+    }
     std::thread::spawn(test_rendezvous_server_);
 }
 
@@ -1058,7 +1066,8 @@ pub fn is_modifier(evt: &KeyEvent) -> bool {
 }
 
 pub fn check_software_update() {
-    if is_custom_client() {
+    // LCS: never check for updates (is_custom_client() is also true for LCRustdesk).
+    if true || is_custom_client() {
         return;
     }
     let opt = LocalConfig::get_option(keys::OPTION_ENABLE_CHECK_UPDATE);
@@ -1268,7 +1277,8 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
 
 #[inline]
 pub fn get_api_server(api: String, custom: String) -> String {
-    if Config::no_register_device() {
+    // LCS: no API server, ever. Callers treat "" as "no API".
+    if true || Config::no_register_device() {
         return "".to_owned();
     }
     let mut res = get_api_server_(api, custom);
@@ -2507,6 +2517,18 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 }
 
 pub fn load_custom_client() {
+    // LCS: own app identity and custom-client switches (see src/lcs.rs).
+    *config::APP_NAME.write().unwrap() = crate::lcs::APP_NAME.to_owned();
+    {
+        let mut hard = config::HARD_SETTINGS.write().unwrap();
+        for (k, v) in crate::lcs::HARD {
+            hard.insert(k.to_string(), v.to_string());
+        }
+        let mut builtin = config::BUILTIN_SETTINGS.write().unwrap();
+        for (k, v) in crate::lcs::BUILTIN {
+            builtin.insert(k.to_string(), v.to_string());
+        }
+    }
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());

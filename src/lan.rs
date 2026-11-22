@@ -52,10 +52,13 @@ pub(super) fn start_listening() -> ResultType<()> {
                                 if hostname == "localhost" {
                                     hostname = "unknown".to_owned();
                                 }
+                                // LCS: advertise the computer name as the id so the viewer
+                                // connects to it directly.
+                                let _ = id;
                                 let peer = PeerDiscovery {
                                     cmd: "pong".to_owned(),
                                     mac: get_mac(&self_addr),
-                                    id,
+                                    id: hostname.clone(),
                                     hostname,
                                     username: crate::platform::get_active_username(),
                                     platform: whoami::platform().to_string(),
@@ -106,7 +109,8 @@ pub fn send_wol(id: String) {
 
 #[inline]
 fn get_broadcast_port() -> u16 {
-    (RENDEZVOUS_PORT + 3) as _
+    // LCS: own discovery port so LCRustdesk and stock RustDesk can coexist.
+    crate::lcs::DISCOVERY_PORT
 }
 
 fn get_mac(_ip: &IpAddr) -> String {

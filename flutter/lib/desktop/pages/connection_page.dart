@@ -170,16 +170,9 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   updateStatus() async {
     final status =
         jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
-    final statusNum = status['status_num'] as int;
-    if (statusNum == 0) {
-      stateGlobal.svcStatus.value = SvcStatus.connecting;
-    } else if (statusNum == -1) {
-      stateGlobal.svcStatus.value = SvcStatus.notReady;
-    } else if (statusNum == 1) {
-      stateGlobal.svcStatus.value = SvcStatus.ready;
-    } else {
-      stateGlobal.svcStatus.value = SvcStatus.notReady;
-    }
+    // LCS: LAN-only build has no rendezvous server, so the rendezvous status is
+    // meaningless; always show Ready (service-stopped is still shown separately).
+    stateGlobal.svcStatus.value = SvcStatus.ready;
     _svcIsUsingPublicServer.value = await bind.mainIsUsingPublicServer();
     try {
       stateGlobal.videoConnCount.value = status['video_conn_count'] as int;

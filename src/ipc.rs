@@ -2160,6 +2160,10 @@ pub fn get_proxy_status() -> bool {
 }
 #[tokio::main(flavor = "current_thread")]
 pub async fn test_rendezvous_server() -> ResultType<()> {
+    // LCS: LAN only, never probe servers.
+    if true {
+        return Ok(());
+    }
     let mut c = connect(1000, "").await?;
     c.send(&Data::TestRendezvousServer).await?;
     Ok(())

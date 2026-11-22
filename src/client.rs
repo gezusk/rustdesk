@@ -5347,6 +5347,12 @@ pub mod peer_online {
     };
 
     pub async fn query_online_states<F: FnOnce(Vec<String>, Vec<String>)>(ids: Vec<String>, f: F) {
+        // LCS: no rendezvous server to ask; report no states.
+        if true {
+            let _ = ids;
+            f(vec![], vec![]);
+            return;
+        }
         let test = false;
         if test {
             sleep(1.5).await;

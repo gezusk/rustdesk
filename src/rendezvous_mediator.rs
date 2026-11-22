@@ -316,11 +316,7 @@ impl RendezvousMediator {
                 sleep(1.).await;
             }
         }
-        crate::hbbs_http::sync::start();
-        #[cfg(target_os = "windows")]
-        if crate::platform::is_installed() && crate::is_server() {
-            crate::updater::start_auto_update();
-        }
+        // LCS: no API heartbeat/sync and no auto-update (no servers).
         check_zombie();
         let server = new_server();
         if config::option2bool("stop-service", &Config::get_option("stop-service")) {
@@ -340,6 +336,12 @@ impl RendezvousMediator {
             });
         }
         scrap::codec::test_av1();
+        // LCS: never register with a rendezvous server. Direct server + LAN discovery only.
+        if true {
+            loop {
+                sleep(3600.).await;
+            }
+        }
         *LAST_NOT_DEPLOYED_REGISTER.lock().await = None;
         loop {
             let timeout = Arc::new(RwLock::new(CONNECT_TIMEOUT));
