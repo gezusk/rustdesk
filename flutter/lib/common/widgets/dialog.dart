@@ -1103,15 +1103,7 @@ _connectDialog(
             controller: passwordController,
             autoFocus: osUsernameController == null,
           ),
-          rememberWidget(
-            translate('Remember password'),
-            rememberPassword,
-            (v) {
-              if (v != null) {
-                setState(() => rememberPassword = v);
-              }
-            },
-          ),
+          // LCS: no per-PC "Remember password"; the typed password becomes the shared one.
         ],
       );
     }

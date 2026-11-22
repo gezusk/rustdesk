@@ -2845,6 +2845,8 @@ pub struct LoginConfigHandler {
     hash: Hash,
     password: Vec<u8>, // remember password for reconnect
     pub remember: bool,
+    // LCS: password typed in the dialog; saved as the shared password once login succeeds.
+    lcs_typed_password: Option<String>,
     login_method: login_method::LoginMethod,
     config: PeerConfig,
     pub port_forward: (String, i32),
@@ -3673,6 +3675,10 @@ impl LoginConfigHandler {
     /// * `username` - The name of the peer.
     /// * `pi` - The peer info.
     pub fn handle_peer_info(&mut self, pi: &PeerInfo) {
+        // LCS: PeerInfo arrives only after a successful login.
+        if let Some(p) = self.lcs_typed_password.take() {
+            crate::lcs::set_shared_password(&p);
+        }
         if !pi.version.is_empty() {
             self.version = hbb_common::get_version_number(&pi.version);
         }
@@ -4752,6 +4758,18 @@ pub async fn handle_hash(
         }
     }
 
+    // LCS: the one shared password this Windows user saved (DPAPI).
+    if password.is_empty() {
+        if let Some(p) = crate::lcs::get_shared_password() {
+            let mut hasher = Sha256::new();
+            hasher.update(p.clone());
+            hasher.update(&hash.salt);
+            let res = hasher.finalize();
+            password = res[..].into();
+            lc.write().unwrap().password_source = PasswordSource::SharedAb(p);
+        }
+    }
+
     lc.write().unwrap().password = password.clone();
 
     let request_approval = lc.read().unwrap().skips_saved_password();
@@ -4889,11 +4907,14 @@ pub async fn handle_login_from_ui(
         password2
     } else {
         lc.write().unwrap().password_source = Default::default();
+        // LCS: no per-PC saved passwords; remember the typed one as the shared password.
+        let _ = remember;
+        lc.write().unwrap().lcs_typed_password = Some(password.clone());
         let mut hasher = Sha256::new();
         hasher.update(password);
         hasher.update(&lc.read().unwrap().hash.salt);
         let res = hasher.finalize();
-        lc.write().unwrap().remember = remember;
+        lc.write().unwrap().remember = false;
         res[..].into()
     };
     lc.write().unwrap().password = hash_password.clone();

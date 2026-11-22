@@ -195,6 +195,7 @@ pub async fn secure_direct(typed: &str, conn: &mut hbb_common::Stream) -> hbb_co
             picked,
         },
     )?;
+    hbb_common::log::info!("LCS: encrypted direct connection to {name} ({typed})");
     Ok(name)
 }
 

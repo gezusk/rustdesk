@@ -472,6 +472,10 @@ pub fn core_main() -> Option<CoreMainAction> {
                 println!("{}", if found { "Done!" } else { "Not found" });
             }
             return None;
+        } else if args[0] == "--forget-password" {
+            crate::lcs::forget_shared_password();
+            println!("Done!");
+            return None;
         } else if args[0] == "--set-id" {
             if is_cli_setting_change_disabled() {
                 println!("Settings are disabled!");
